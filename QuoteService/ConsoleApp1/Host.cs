@@ -22,8 +22,12 @@ namespace QuoteService
         private readonly Dictionary<string, List<Stream>> _subscribers = new Dictionary<string, List<Stream>>();
         public Action<string, Stream> OnSubscribe { private get; set; }
 
+        private CancellationToken _cancellationToken;
+
         public async Task Listen(IPAddress address, int port, CancellationToken cancellationToken)
         {
+            _cancellationToken = cancellationToken;
+
             await _exchangeWebsocketClient.ConnectAsync("wss://ws-feed.pro.coinbase.com", cancellationToken);
             _exchangeWebsocketClient.Listen();
             _exchangeWebsocketClient.OnMessage = async (symbol, message) =>
@@ -34,6 +38,7 @@ namespace QuoteService
                 for (int i = 0; i < subscribers.Count; ++i)
                 {
                     var stream = subscribers[i];
+                    await stream.WriteAsync(toSend, cancellationToken);
 
                     try
                     {
@@ -43,13 +48,16 @@ namespace QuoteService
                     {
                         if (exception.InnerException is SocketException)
                         {
-                            Log.Info($"{stream.RemoteEndPoint} disconnected");
-                            subscribers.Remove(stream);
+                            OnClientDisconnected(stream, symbol);
                         }
                         else
                         {
                             throw;
                         }
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        OnClientDisconnected(stream, symbol);
                     }
                 }
             };
@@ -61,6 +69,15 @@ namespace QuoteService
             await AcceptConnectionsAsync();
         }
 
+        private void OnClientDisconnected(Stream stream, string symbol)
+        {
+            Log.Info($"{stream.RemoteEndPoint} {symbol} disconnected");
+            foreach (var value in _subscribers.Values)
+            {
+                value.Remove(stream);
+            }
+        }
+
         private async Task AcceptConnectionsAsync()
         {
             try
@@ -68,7 +85,7 @@ namespace QuoteService
                 while (true)
                 {
                     var socket = await _socket.AcceptAsync();
-                    OnClientConnected(socket);
+                    await OnClientConnected(socket);
                 }
             }
             catch (Exception ex)
@@ -78,42 +95,59 @@ namespace QuoteService
             }
         }
 
-        private async Task OnClientConnected(Socket socket)
+        private Task OnClientConnected(Socket socket)
         {
-            Log.Info($"{socket.RemoteEndPoint} connected");
-
-            var stream = new Stream(socket);
-            var reader = PipeReader.Create(stream);
-
-            while (true)
+            return Task.Factory.StartNew(async () =>
             {
-                ReadResult result = await reader.ReadAsync();
-                ReadOnlySequence<byte> buffer = result.Buffer;
+                Log.Info($"{socket.RemoteEndPoint} connected");
 
-                while (TryReadLine(ref buffer, out ReadOnlySequence<byte> line))
+                var stream = new Stream(socket);
+                var reader = PipeReader.Create(stream);
+
+                try
                 {
-                    var symbol = GetSymbol(line);
-                    if (!_subscribers.TryGetValue(symbol, out var streams))
+                    while (true)
                     {
-                        streams = new List<Stream>();
-                        _subscribers.Add(symbol, streams);
+                        ReadResult result = await reader.ReadAsync(_cancellationToken);
+
+                        ReadOnlySequence<byte> buffer = result.Buffer;
+
+                        while (TryReadLine(ref buffer, out ReadOnlySequence<byte> line))
+                        {
+                            var symbol = GetSymbol(line);
+                            if (!_subscribers.TryGetValue(symbol, out var streams))
+                            {
+                                streams = new List<Stream>();
+                                _subscribers.Add(symbol, streams);
+                            }
+
+                            streams.Add(stream);
+
+                            await _exchangeWebsocketClient.Subscribe(symbol);
+                            OnSubscribe(symbol, stream);
+                        }
+
+                        reader.AdvanceTo(buffer.Start, buffer.End);
+                        if (result.IsCompleted)
+                        {
+                            break;
+                        }
                     }
-
-                    streams.Add(stream);
-
-                    await _exchangeWebsocketClient.Subscribe(symbol);
-                    OnSubscribe(symbol, stream);
                 }
-
-                reader.AdvanceTo(buffer.Start, buffer.End);
-                if (result.IsCompleted)
+                catch (IOException exception)
                 {
-                    break;
+                    await reader.CompleteAsync(exception);
                 }
-            }
-
-            await reader.CompleteAsync();
-            Log.Info($"[{socket.RemoteEndPoint}]: disconnected");
+                catch (ObjectDisposedException exception)
+                {
+                    await reader.CompleteAsync(exception);
+                }
+                catch (Exception exception)
+                {
+                    await reader.CompleteAsync(exception);
+                    Log.Error(exception.Message);
+                }
+            }, _cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         }
 
         private static bool TryReadLine(ref ReadOnlySequence<byte> buffer, out ReadOnlySequence<byte> line)
