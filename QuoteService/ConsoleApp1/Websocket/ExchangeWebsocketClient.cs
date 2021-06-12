@@ -28,7 +28,6 @@ namespace QuoteService.Websocket
         private readonly Dictionary<string, Channel<string>> _messages = new Dictionary<string, Channel<string>>();
         private readonly object _bookLocker = new object();
         private readonly Dictionary<string, Dictionary<string, Order>> _orderBook = new Dictionary<string, Dictionary<string, Order>>();
-        private readonly Dictionary<string, ReadOnlyMemory<char>> _orderStartSequence = new Dictionary<string, ReadOnlyMemory<char>>();
 
         public Task ConnectAsync(string url, CancellationToken cancellationToken)
         {
@@ -50,31 +49,6 @@ namespace QuoteService.Websocket
                     throw;
                 }
             }, _cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
-        }
-
-        public async Task Subscribe(string symbol)
-        {
-            if (_orderStartSequence.ContainsKey(symbol))
-            {
-                return;
-            }
-
-            var channel = Channel.CreateUnbounded<string>(new UnboundedChannelOptions {SingleReader = true, SingleWriter = true});
-            _messages.Add(symbol, channel);
-
-            var req = new Request
-            {
-                type = "subscribe",
-                channels = new[] { new Message.Channel { name = "full", product_ids = new[] { symbol } } }
-            };
-
-            var data = JsonSerializer.Serialize(req);
-            await _webSocket.SendAsync(Encoding.UTF8.GetBytes(data), Text, true, _cancellationToken);
-
-            var result = await _restClient.GetOrderBook(symbol);
-
-            _orderBook.Add(symbol, result.book);
-            _orderStartSequence.Add(symbol, result.sequence);
         }
 
         public async Task Receive()
@@ -111,10 +85,58 @@ namespace QuoteService.Websocket
             } while (true);
         }
 
-        public Task Consume(string symbol)
+        public async Task Subscribe(string symbol)
         {
-            var channel = _messages[symbol];
+            if (_orderBook.ContainsKey(symbol))
+            {
+                return;
+            }
 
+            var channel = Channel.CreateUnbounded<string>(new UnboundedChannelOptions {SingleReader = true, SingleWriter = true});
+            _messages.Add(symbol, channel);
+
+            var req = new Request
+            {
+                type = "subscribe",
+                channels = new[] { new Message.Channel { name = "full", product_ids = new[] { symbol } } }
+            };
+
+            var data = JsonSerializer.Serialize(req);
+            await _webSocket.SendAsync(Encoding.UTF8.GetBytes(data), Text, true, _cancellationToken);
+
+            var result = await _restClient.GetOrderBook(symbol);
+            _orderBook.Add(symbol, result.book);
+
+            await WarmUp(channel, result.sequence);
+            await Consume(channel);
+        }
+
+        private Task WarmUp(Channel<string> channel, ReadOnlyMemory<char> startSequence)
+        {
+            return Task.Factory.StartNew(async () =>
+            {
+                try
+                {
+                    while (await channel.Reader.WaitToReadAsync(_cancellationToken))
+                    {
+                        while (channel.Reader.TryRead(out string item))
+                        {
+                            if (!IsSequencedAfterStart(item, startSequence)) continue;
+                            ProcessMessage(item);
+                            return;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex.Message);
+                    throw;
+                }
+            }, _cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        }
+
+        private Task Consume(Channel<string> channel)
+        {
             return Task.Factory.StartNew(async () =>
             {
                 try
@@ -138,10 +160,6 @@ namespace QuoteService.Websocket
         private void ProcessMessage(string message)
         {
             var line = message.AsSpan();
-            if (false == IsSequencedAfterStart(line))
-            {
-                return;
-            }
 
             if (line.IndexOf(messageTypeReceived.Span) != -1 || line.IndexOf(messageTypeActivate.Span) != -1)
             {
@@ -307,15 +325,10 @@ namespace QuoteService.Websocket
             }
         }
 
-        private bool IsSequencedAfterStart(ReadOnlySpan<char> messageSpan)
+        private bool IsSequencedAfterStart(string message, ReadOnlyMemory<char> start)
         {
-            var symbolSpan = symbolProperty.Span;
-            int symbolStart = messageSpan.IndexOf(symbolSpan);
-            int symbolValueStart = symbolStart + symbolSpan.Length;
-            int symbolValueSize = messageSpan.Slice(symbolValueStart).IndexOf(',');
-            var symbolValue = messageSpan.Slice(symbolValueStart + 1, symbolValueSize - 2);
-
-            var startSpan = _orderStartSequence[symbolValue.ToString()].Span;
+            var messageSpan = message.AsSpan();
+            var startSpan = start.Span;
             var sequenceSpan = sequenceProperty.Span;
 
             int sequenceStart = messageSpan.IndexOf(sequenceSpan);

@@ -102,7 +102,6 @@ namespace QuoteService
                     streams.Add(stream);
 
                     await _exchangeWebsocketClient.Subscribe(symbol);
-                    await _exchangeWebsocketClient.Consume(symbol);
                     OnSubscribe(symbol, stream);
                 }
 
