@@ -38,7 +38,6 @@ namespace QuoteService
                 for (int i = 0; i < subscribers.Count; ++i)
                 {
                     var stream = subscribers[i];
-                    await stream.WriteAsync(toSend, cancellationToken);
 
                     try
                     {
@@ -48,7 +47,7 @@ namespace QuoteService
                     {
                         if (exception.InnerException is SocketException)
                         {
-                            OnClientDisconnected(stream, symbol);
+                            OnClientDisconnected(stream);
                         }
                         else
                         {
@@ -57,7 +56,7 @@ namespace QuoteService
                     }
                     catch (ObjectDisposedException)
                     {
-                        OnClientDisconnected(stream, symbol);
+                        OnClientDisconnected(stream);
                     }
                 }
             };
@@ -69,9 +68,9 @@ namespace QuoteService
             await AcceptConnectionsAsync();
         }
 
-        private void OnClientDisconnected(Stream stream, string symbol)
+        private void OnClientDisconnected(Stream stream)
         {
-            Log.Info($"{stream.RemoteEndPoint} {symbol} disconnected");
+            Log.Info($"{stream.RemoteEndPoint} disconnected");
             foreach (var value in _subscribers.Values)
             {
                 value.Remove(stream);
@@ -115,6 +114,7 @@ namespace QuoteService
                         while (TryReadLine(ref buffer, out ReadOnlySequence<byte> line))
                         {
                             var symbol = GetSymbol(line);
+
                             if (!_subscribers.TryGetValue(symbol, out var streams))
                             {
                                 streams = new List<Stream>();
@@ -124,6 +124,11 @@ namespace QuoteService
                             streams.Add(stream);
 
                             await _exchangeWebsocketClient.Subscribe(symbol);
+
+                            var initBook = _exchangeWebsocketClient.GetOrderBook(symbol);
+                            var toSend = Encoding.ASCII.GetBytes(initBook);
+                            await stream.WriteAsync(toSend, _cancellationToken);
+
                             OnSubscribe(symbol, stream);
                         }
 

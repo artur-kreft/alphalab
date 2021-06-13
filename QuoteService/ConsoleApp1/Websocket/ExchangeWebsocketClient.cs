@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -27,6 +28,7 @@ namespace QuoteService.Websocket
         private CancellationToken _cancellationToken;
         private readonly Dictionary<string, Channel<string>> _messages = new Dictionary<string, Channel<string>>();
         private readonly object _bookLocker = new object();
+        private readonly object _bookSymbolLocker = new object();
         private readonly Dictionary<string, Dictionary<string, Order>> _orderBook = new Dictionary<string, Dictionary<string, Order>>();
 
         public Task ConnectAsync(string url, CancellationToken cancellationToken)
@@ -87,9 +89,12 @@ namespace QuoteService.Websocket
 
         public async Task Subscribe(string symbol)
         {
-            if (_orderBook.ContainsKey(symbol))
+            lock (_bookLocker)
             {
-                return;
+                if (_orderBook.ContainsKey(symbol))
+                {
+                    return;
+                }
             }
 
             var channel = Channel.CreateUnbounded<string>(new UnboundedChannelOptions {SingleReader = true, SingleWriter = true});
@@ -105,10 +110,90 @@ namespace QuoteService.Websocket
             await _webSocket.SendAsync(Encoding.UTF8.GetBytes(data), Text, true, _cancellationToken);
 
             var result = await _restClient.GetOrderBook(symbol);
-            _orderBook.Add(symbol, result.book);
+
+            lock (_bookLocker)
+            {
+                _orderBook.Add(symbol, result.book);
+            }
 
             await WarmUp(channel, result.sequence);
             await Consume(channel);
+        }
+
+        public string GetOrderBook(string symbol)
+        {
+            Dictionary<string, Order> book;
+            lock (_bookLocker)
+            {
+                book = _orderBook[symbol];
+            }
+
+            StringBuilder builder = new StringBuilder();
+
+            lock (_bookSymbolLocker)
+            {
+                List<KeyValuePair<string, Order>> sells = new List<KeyValuePair<string, Order>>(book.Count);
+                List<KeyValuePair<string, Order>> buys = new List<KeyValuePair<string, Order>>(book.Count);
+
+                foreach (KeyValuePair<string, Order> pair in book)
+                {
+                    if (pair.Value.Side == 's')
+                    {
+                        sells.Add(pair);
+                    }
+                    else
+                    {
+                        buys.Add(pair);
+                    }
+                }
+
+                sells = sells.OrderBy(it => it.Value.Price).ToList();
+                buys = buys.OrderByDescending(it => it.Value.Price).ToList();
+
+                for (int i = 0; i < sells.Count; ++i)
+                {
+                    var order = sells[i];
+
+                    builder.Append('2');
+                    builder.Append('|');
+                    builder.Append(symbol);
+                    builder.Append('|');
+                    builder.Append('s');
+                    builder.Append('|');
+                    builder.Append(order.Key);
+                    builder.Append('|');
+                    builder.Append(order.Value.Price);
+                    builder.Append('|');
+                    builder.Append(order.Value.Size);
+                    builder.Append('|');
+                    builder.Append(order.Value.Time);
+                    builder.Append('|');
+                    builder.Append('\n');
+                }
+
+                for (int i = 0; i < buys.Count; ++i)
+                {
+                    var order = buys[i];
+
+                    builder.Append('2');
+                    builder.Append('|');
+                    builder.Append(symbol);
+                    builder.Append('|');
+                    builder.Append('b');
+                    builder.Append('|');
+                    builder.Append(order.Key);
+                    builder.Append('|');
+                    builder.Append(order.Value.Price);
+                    builder.Append('|');
+                    builder.Append(order.Value.Size);
+                    builder.Append('|');
+                    builder.Append(order.Value.Time);
+                    builder.Append('|');
+                    builder.Append('\n');
+                }
+            }
+
+            return builder.ToString();
         }
 
         private Task WarmUp(Channel<string> channel, ReadOnlyMemory<char> startSequence)
@@ -167,7 +252,11 @@ namespace QuoteService.Websocket
             }
 
             var symbol = GetSymbol(message);
-            var book = _orderBook[symbol];
+            Dictionary<string, Order> book;
+            lock (_bookLocker)
+            {
+                book = _orderBook[symbol];
+            }
 
             if (line.IndexOf(messageTypeOpen.Span) != -1)
             {
@@ -179,7 +268,7 @@ namespace QuoteService.Websocket
                     Side = parsed.side[0]
                 };
 
-                lock (_bookLocker)
+                lock (_bookSymbolLocker)
                 {
                     book.Add(parsed.order_id, order);
                 }
@@ -207,7 +296,7 @@ namespace QuoteService.Websocket
             {
                 var parsed = JsonSerializer.Deserialize<Change>(message, _serializerOptions);
 
-                lock (_bookLocker)
+                lock (_bookSymbolLocker)
                 {
                     if (book.ContainsKey(parsed.order_id))
                     {
@@ -239,7 +328,7 @@ namespace QuoteService.Websocket
             {
                 var parsed = JsonSerializer.Deserialize<Match>(message, _serializerOptions);
 
-                lock (_bookLocker)
+                lock (_bookSymbolLocker)
                 {
                     if (book.ContainsKey(parsed.maker_order_id))
                     {
@@ -295,7 +384,7 @@ namespace QuoteService.Websocket
             {
                 var parsed = JsonSerializer.Deserialize<Done>(message, _serializerOptions);
 
-                lock (_bookLocker)
+                lock (_bookSymbolLocker)
                 {
                     if (book.ContainsKey(parsed.order_id))
                     {
