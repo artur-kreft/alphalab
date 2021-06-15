@@ -7,26 +7,36 @@ namespace MarketData
 {
     class Program
     {
-        static string path = Directory.GetParent(Environment.CurrentDirectory).Parent.Parent.Parent.Parent.FullName;
+        static string path = Directory.GetParent(Environment.CurrentDirectory).Parent.Parent.Parent.FullName;
 
         static async Task Main(string[] args)
         {
-            var outputFile = $"{path}\\output.txt";
+            string outputFile = "";
 
-            if (!File.Exists(outputFile))
+            int i = 0;
+            while(true)
             {
-                using (StreamWriter creator = File.CreateText(outputFile))
+                outputFile = $"{path}\\output_test\\output_{i}.txt";
+                if (!File.Exists(outputFile))
                 {
+                    using (StreamWriter creator = File.CreateText(outputFile))
+                    {
+                    }
+                    break;
+                } 
+                else
+                {
+                    ++i;
                 }
-            }
+            }            
 
-            using StreamWriter sw = File.AppendText(path);
+            using StreamWriter sw = File.AppendText(outputFile);
 
             using var client = new MarketDataClient
             {
                 OnInitBook = (order) =>
                 {
-                    sw.WriteLine("init " + order);
+                    Console.WriteLine("init " + order);
                 },
                 OnBook = (order) =>
                 {
@@ -42,9 +52,6 @@ namespace MarketData
             await client.Listen();
 
             await client.SubscribeAsync("BTC-USD");
-            Console.ReadKey();
-
-            await client.SubscribeAsync("ETH-USD");
             Console.ReadKey();
         }
     }
