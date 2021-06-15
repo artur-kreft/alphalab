@@ -30,7 +30,7 @@ namespace QuoteService
 
             await _exchangeWebsocketClient.ConnectAsync("wss://ws-feed.pro.coinbase.com", cancellationToken);
             _exchangeWebsocketClient.Listen();
-            _exchangeWebsocketClient.OnMessage = async (symbol, message) =>
+            _exchangeWebsocketClient.OnMessage = (symbol, message) =>
             {
                 var subscribers = _subscribers[symbol];
                 var toSend = Encoding.ASCII.GetBytes(message);
@@ -41,7 +41,7 @@ namespace QuoteService
 
                     try
                     {
-                        await stream.WriteAsync(toSend, cancellationToken);
+                        stream.Write(toSend);
                     }
                     catch (IOException exception)
                     {
