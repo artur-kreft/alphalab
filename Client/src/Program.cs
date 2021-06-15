@@ -1,26 +1,40 @@
 ﻿using System;
 using System.Net;
 using System.Threading.Tasks;
+using System.IO;
 
 namespace MarketData
 {
     class Program
     {
+        static string path = Directory.GetParent(Environment.CurrentDirectory).Parent.Parent.Parent.Parent.FullName;
+
         static async Task Main(string[] args)
         {
+            var outputFile = $"{path}\\output.txt";
+
+            if (!File.Exists(outputFile))
+            {
+                using (StreamWriter creator = File.CreateText(outputFile))
+                {
+                }
+            }
+
+            using StreamWriter sw = File.AppendText(path);
+
             using var client = new MarketDataClient
             {
                 OnInitBook = (order) =>
                 {
-                    Console.WriteLine("init " + order);
+                    sw.WriteLine("init " + order);
                 },
                 OnBook = (order) =>
                 {
-                    Console.WriteLine(order);
+                    sw.WriteLine(order);
                 },
                 OnTrade = (trade) =>
                 {
-                    Console.WriteLine(trade);
+                    sw.WriteLine(trade);
                 },
             };
 
