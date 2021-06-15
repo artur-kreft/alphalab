@@ -10,13 +10,17 @@ namespace MarketData
         {
             using var client = new MarketDataClient
             {
-                OnTrade = (trade) =>
+                OnInitBook = (order) =>
                 {
-                    Console.WriteLine(trade);
+                    Console.WriteLine("init " + order);
                 },
                 OnBook = (order) =>
                 {
                     Console.WriteLine(order);
+                },
+                OnTrade = (trade) =>
+                {
+                    Console.WriteLine(trade);
                 },
             };
 

@@ -13,6 +13,7 @@ namespace MarketData
 {
     public class MarketDataClient : IDisposable
     {
+        public Action<Order> OnInitBook { private get; set; }
         public Action<Order> OnBook { private get; set; }
         public Action<Trade> OnTrade { private get; set; }
 
@@ -134,6 +135,7 @@ namespace MarketData
         {
             var orderType = "0".AsSpan();
             var tradeType = "1".AsSpan();
+            var initType = "2".AsSpan();
 
             var bytes = buffer.ToArray();
             var chars = ArrayPool<char>.Shared.Rent(Encoding.ASCII.GetCharCount(bytes, 0, bytes.Length));
@@ -145,7 +147,7 @@ namespace MarketData
             var type = span.Slice(0, sepIndex);
             span = span.Slice(sepIndex + 1);
 
-            if (type.SequenceEqual(orderType))
+            if (type.SequenceEqual(initType))
             {
                 var order = new Order();
 
@@ -170,8 +172,38 @@ namespace MarketData
                 span = span.Slice(sepIndex + 1);
 
                 sepIndex = span.IndexOf('|');
-                order.Time = DateTime.Parse(span.Slice(0, sepIndex));
+                DateTime.TryParse(span.Slice(0, sepIndex), out DateTime time);
+                order.Time = time;
+
+                OnInitBook(order);
+            }
+            else if (type.SequenceEqual(orderType))
+            {
+                var order = new Order();
+
+                sepIndex = span.IndexOf('|');
+                order.Symbol = span.Slice(0, sepIndex).ToString();
                 span = span.Slice(sepIndex + 1);
+
+                sepIndex = span.IndexOf('|');
+                order.Side = span.Slice(0, sepIndex).ToArray()[0];
+                span = span.Slice(sepIndex + 1);
+
+                sepIndex = span.IndexOf('|');
+                order.OrderId = span.Slice(0, sepIndex).ToString();
+                span = span.Slice(sepIndex + 1);
+
+                sepIndex = span.IndexOf('|');
+                order.Price = decimal.Parse(span.Slice(0, sepIndex));
+                span = span.Slice(sepIndex + 1);
+
+                sepIndex = span.IndexOf('|');
+                order.Size = decimal.Parse(span.Slice(0, sepIndex));
+                span = span.Slice(sepIndex + 1);
+
+                sepIndex = span.IndexOf('|');
+                DateTime.TryParse(span.Slice(0, sepIndex), out DateTime time);
+                order.Time = time;
 
                 OnBook(order);
             }
@@ -208,13 +240,11 @@ namespace MarketData
                 span = span.Slice(sepIndex + 1);
 
                 sepIndex = span.IndexOf('|');
-                trade.Time = DateTime.Parse(span.Slice(0, sepIndex));
-                span = span.Slice(sepIndex + 1);
+                DateTime.TryParse(span.Slice(0, sepIndex), out DateTime time);
+                trade.Time = time;
 
                 OnTrade(trade);
             }
-
-            
 
             ArrayPool<char>.Shared.Return(chars);
         }
