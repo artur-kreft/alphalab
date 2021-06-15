@@ -133,10 +133,6 @@ namespace MarketData
 
         private void ProcessLine(in ReadOnlySequence<byte> buffer)
         {
-            var orderType = "0".AsSpan();
-            var tradeType = "1".AsSpan();
-            var initType = "2".AsSpan();
-
             var bytes = buffer.ToArray();
             var chars = ArrayPool<char>.Shared.Rent(Encoding.ASCII.GetCharCount(bytes, 0, bytes.Length));
             var span = new Span<char>(chars);
@@ -147,7 +143,7 @@ namespace MarketData
             var type = span.Slice(0, sepIndex);
             span = span.Slice(sepIndex + 1);
 
-            if (type.SequenceEqual(initType))
+            if (type.SequenceEqual(initType.Span))
             {
                 var order = new Order();
 
@@ -177,7 +173,7 @@ namespace MarketData
 
                 OnInitBook(order);
             }
-            else if (type.SequenceEqual(orderType))
+            else if (type.SequenceEqual(orderType.Span))
             {
                 var order = new Order();
 
@@ -207,7 +203,7 @@ namespace MarketData
 
                 OnBook(order);
             }
-            else if (type.SequenceEqual(tradeType))
+            else if (type.SequenceEqual(tradeType.Span))
             {
                 var trade = new Trade();
 
@@ -248,5 +244,9 @@ namespace MarketData
 
             ArrayPool<char>.Shared.Return(chars);
         }
+
+        private static ReadOnlyMemory<char> orderType = "0".AsMemory();
+        private static ReadOnlyMemory<char> tradeType = "1".AsMemory();
+        private static ReadOnlyMemory<char> initType = "2".AsMemory();
     }
 }
