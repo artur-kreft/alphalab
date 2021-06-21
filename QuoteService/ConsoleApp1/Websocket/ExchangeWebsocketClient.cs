@@ -21,6 +21,7 @@ namespace QuoteService.Websocket
     public class ExchangeWebsocketClient : IDisposable
     {
         public Action<string, string> OnMessage { private get; set; }
+        public Action<string> OnDisconnected { private get; set; }
 
         private readonly ClientWebSocket _webSocket = new ClientWebSocket();
         private readonly ExchangeRestClient _restClient = new ExchangeRestClient("https://api.pro.coinbase.com/");
@@ -44,6 +45,12 @@ namespace QuoteService.Websocket
                 try
                 {
                     await Receive();
+                }
+                catch (WebSocketException ex)
+                {
+                    StringBuilder builder = new StringBuilder();
+                    Log.Error(ex.Message);
+                    OnDisconnected($"9|Exchange data source disconnected\n");
                 }
                 catch (Exception ex)
                 {

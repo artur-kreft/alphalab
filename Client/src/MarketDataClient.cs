@@ -16,6 +16,7 @@ namespace MarketData
         public Action<Order> OnInitBook { private get; set; }
         public Action<Order> OnBook { private get; set; }
         public Action<Trade> OnTrade { private get; set; }
+        public Action<string> OnError { private get; set; }
 
         private readonly Socket _socket = new Socket(SocketType.Stream, ProtocolType.Tcp);
         private NetworkStream _stream;
@@ -241,6 +242,13 @@ namespace MarketData
 
                 OnTrade(trade);
             }
+            else if (type.SequenceEqual(errorType.Span))
+            {
+                sepIndex = span.IndexOf('|');
+                var error = span.Slice(0, sepIndex).ToString();
+
+                OnError(error);
+            }
 
             ArrayPool<char>.Shared.Return(chars);
         }
@@ -248,5 +256,6 @@ namespace MarketData
         private static ReadOnlyMemory<char> orderType = "0".AsMemory();
         private static ReadOnlyMemory<char> tradeType = "1".AsMemory();
         private static ReadOnlyMemory<char> initType = "2".AsMemory();
+        private static ReadOnlyMemory<char> errorType = "9".AsMemory();
     }
 }

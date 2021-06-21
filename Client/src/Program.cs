@@ -46,6 +46,10 @@ namespace MarketData
                 {
                     sw.WriteLine(trade);
                 },
+                OnError = (error) =>
+                {
+                    Console.WriteLine(error);
+                },
             };
 
             client.Connect(IPAddress.Loopback, 8087);

@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipelines;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -30,6 +31,36 @@ namespace QuoteService
 
             await _exchangeWebsocketClient.ConnectAsync("wss://ws-feed.pro.coinbase.com", cancellationToken);
             _exchangeWebsocketClient.Listen();
+            _exchangeWebsocketClient.OnDisconnected = (message) =>
+            {
+                var subscribers = _subscribers.Values.SelectMany(it => it).Distinct().ToList();
+                var toSend = Encoding.ASCII.GetBytes(message);
+
+                for (int i = 0; i < subscribers.Count; ++i)
+                {
+                    var stream = subscribers[i];
+
+                    try
+                    {
+                        stream.Write(toSend);
+                    }
+                    catch (IOException exception)
+                    {
+                        if (exception.InnerException is SocketException)
+                        {
+                            OnClientDisconnected(stream);
+                        }
+                        else
+                        {
+                            throw;
+                        }
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        OnClientDisconnected(stream);
+                    }
+                }
+            };
             _exchangeWebsocketClient.OnMessage = (symbol, message) =>
             {
                 var subscribers = _subscribers[symbol];
